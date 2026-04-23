@@ -1,14 +1,6 @@
 /**
- * CloudPress v20.1 — Originless Edge CMS Worker ()
- *
- *  :
- *  - CP.apiFetch is not a function   
- *  -    KV   (  → KV lookup)
- *  -  wp-admin  → wp-login.php  (  )
- *  -   fetch    fetch()  (CP.apiFetch )
- *  -     (POST → D1 user  → KV   →  Set)
- *  -     (wordpress_logged_in_SESSION)
- *  - bcrypt/MD5    plain password fallback 
+ * CloudPress v20.1 — Originless Edge CMS Worker
+ * 수정: 로그인 DB 조회, 관리자 자동 생성, 화면 깨짐 수정, CP.apiFetch → fetch() 교체
  */
 
 //   
@@ -320,7 +312,6 @@ async function resolveWPRoute(env, sitePrefix, pathname, search, opts) {
 
   let type = 'home', posts = [], post = null, term = null;
 
-  if (!env.DB) return { type: 'home', post: null, posts: [], term: null };
   try {
     if (pathname === '/' || pathname === '') {
       const frontPage = opts.page_on_front ? parseInt(opts.page_on_front, 10) : 0;
@@ -414,8 +405,7 @@ async function resolveWPRoute(env, sitePrefix, pathname, search, opts) {
     }
   } catch (e) {
     console.warn('[SSR] DB query error:', e.message);
-    type = 'home';
-    posts = [];
+    type = 'error';
   }
 
   return { type, post, posts, term };
@@ -426,30 +416,26 @@ async function renderWPTemplate(env, sitePrefix, siteInfo, contentData, ctx) {
   const { type, post, posts, term } = contentData;
 
   let recentPosts = [];
-  if (env.DB) {
-    try {
-      const rp = await env.DB.prepare(
-        `SELECT ID, post_title, post_name, post_date FROM wp_posts
-          WHERE post_type = 'post' AND post_status = 'publish'
-          ORDER BY post_date DESC LIMIT 5`
-      ).all();
-      recentPosts = rp.results || [];
-    } catch {}
-  }
+  try {
+    const rp = await env.DB.prepare(
+      `SELECT ID, post_title, post_name, post_date FROM wp_posts
+        WHERE post_type = 'post' AND post_status = 'publish'
+        ORDER BY post_date DESC LIMIT 5`
+    ).all();
+    recentPosts = rp.results || [];
+  } catch {}
 
   let navItems = [];
-  if (env.DB) {
-    try {
-      const navRes = await env.DB.prepare(
-        `SELECT p.post_title, pm.meta_value as url, p.menu_order
-           FROM wp_posts p
-           LEFT JOIN wp_postmeta pm ON pm.post_id = p.ID AND pm.meta_key = '_menu_item_url'
-          WHERE p.post_type = 'nav_menu_item' AND p.post_status = 'publish'
-          ORDER BY p.menu_order ASC LIMIT 20`
-      ).all();
-      navItems = navRes.results || [];
-    } catch {}
-  }
+  try {
+    const navRes = await env.DB.prepare(
+      `SELECT p.post_title, pm.meta_value as url, p.menu_order
+         FROM wp_posts p
+         LEFT JOIN wp_postmeta pm ON pm.post_id = p.ID AND pm.meta_key = '_menu_item_url'
+        WHERE p.post_type = 'nav_menu_item' AND p.post_status = 'publish'
+        ORDER BY p.menu_order ASC LIMIT 20`
+    ).all();
+    navItems = navRes.results || [];
+  } catch {}
 
   let mainContent = '';
   let pageTitle   = siteName;
@@ -484,18 +470,8 @@ async function renderWPTemplate(env, sitePrefix, siteInfo, contentData, ctx) {
       mainContent += `<header class="page-header"><h1 class="page-title">${esc(term.name)}</h1>${term.description ? `<div class="taxonomy-description">${esc(term.description)}</div>` : ''}</header>`;
     }
     if (posts.length === 0) {
-      // 빈 사이트 - 워드프레스와 동일하게 샘플 콘텐츠 표시
-      mainContent += `
-<article id="post-1" class="post-1 post type-post status-publish hentry">
-  <header class="entry-header">
-    <h2 class="entry-title"><a href="${esc(siteUrl)}/" rel="bookmark">Hello world!</a></h2>
-    <div class="entry-meta"><time class="entry-date published">날짜</time></div>
-  </header>
-  <div class="entry-summary">
-    <p>WordPress에 오신 것을 환영합니다. 이것은 첫 번째 게시물입니다. 이 게시물을 편집하거나 삭제하고 블로그를 시작하세요!</p>
-    <a href="${esc(siteUrl)}/wp-admin/edit.php" class="more-link">게시물 관리</a>
-  </div>
-</article>`;
+      //   -   (  )
+      mainContent += `<div class="wp-block-query"><p class="no-results" style="color:#767676;font-size:1rem;text-align:center;padding:3rem 0">   .</p></div>`;
     } else {
       mainContent += '<div class="posts-loop">';
       for (const p of posts) {
@@ -512,12 +488,10 @@ async function renderWPTemplate(env, sitePrefix, siteInfo, contentData, ctx) {
       mainContent += '</div>';
     }
   } else if (type === '404') {
-    pageTitle = '페이지를 찾을 수 없습니다';
-    mainContent = `<div class="error-404 not-found"><h1>404</h1><p>요청하신 페이지를 찾을 수 없습니다.</p><a href="${esc(siteUrl)}/">홈으로 돌아가기</a></div>`;
-  } else if (type === 'error') {
-    pageTitle = siteName;
-    mainContent = `<div style="text-align:center;padding:3rem 1rem;color:#767676"><p>일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.</p></div>`;
+    pageTitle = '   ';
+    mainContent = `<div class="error-404 not-found"><h1>404</h1><p>    .</p><a href="${esc(siteUrl)}/"></a></div>`;
   }
+
   const navHtml = navItems.length
     ? navItems.map(n => `<li class="menu-item"><a href="${esc(n.url || siteUrl + '/')}">${esc(n.post_title)}</a></li>`).join('')
     : `<li class="menu-item"><a href="${esc(siteUrl)}/"></a></li>`;
@@ -536,7 +510,6 @@ async function renderWPTemplate(env, sitePrefix, siteInfo, contentData, ctx) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="generator" content="WordPress 6.7">
-  <meta name="color-scheme" content="light">
   <title>${pageTitle}${type !== 'home' ? ` – ${esc(siteName)}` : ''}</title>
   <meta name="description" content="${metaDesc}">
   <link rel="canonical" href="${esc(siteUrl + pathname)}">
@@ -544,8 +517,8 @@ async function renderWPTemplate(env, sitePrefix, siteInfo, contentData, ctx) {
   <style>
     :root{--wp--preset--color--black:#000;--wp--preset--color--white:#fff;--wp--preset--font-size--small:13px;--wp--preset--font-size--medium:20px;--wp--preset--font-size--large:36px;}
     *,::after,::before{box-sizing:border-box}
-    html{font-size:16px;scroll-behavior:smooth;color-scheme:light;background:#fff}
-    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:1rem;line-height:1.7;color:#1e1e1e;background:#fff;color-scheme:light}
+    html{font-size:16px;scroll-behavior:smooth}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:1rem;line-height:1.7;color:#1e1e1e;background:#fff}
     a{color:#0073aa;text-decoration:none}a:hover{text-decoration:underline;color:#005580}
     img{max-width:100%;height:auto}
     .site{display:flex;flex-direction:column;min-height:100vh}
@@ -584,6 +557,7 @@ async function renderWPTemplate(env, sitePrefix, siteInfo, contentData, ctx) {
     .page-header{margin-bottom:2rem;padding-bottom:1rem;border-bottom:2px solid #0073aa}
     .page-title{font-size:1.5rem;font-weight:700;margin:0}
     .entry-footer{margin-top:1.5rem;padding-top:1rem;border-top:1px solid #e8e8e8;font-size:.875rem;color:#767676}
+    @media(prefers-color-scheme:dark){body{background:#1a1a1a;color:#e0e0e0}.site-header{background:#1e1e1e;border-bottom-color:#333}.entry-title a,.site-branding .site-title a{color:#e0e0e0}a{color:#4fa8d5}.site-footer{background:#111}.widget{background:#252525;border-color:#333}}
   </style>
 </head>
 <body class="wp-site-blocks ${type === 'single' ? 'single-post' : type === 'page' ? 'page' : type === 'home' ? 'home blog' : type}">
@@ -674,6 +648,18 @@ async function handleWPLogin(env, request, url, siteInfo) {
 
     if (username && password) {
       try {
+        // DB에 사용자가 아예 없으면 → 환경변수 기반 admin 자동 생성
+        const userCount = await env.DB.prepare(`SELECT COUNT(*) as c FROM wp_users`).first().catch(() => ({c:0}));
+        if ((userCount?.c || 0) === 0) {
+          const envUser = env.WP_ADMIN_USER || 'admin';
+          const envPass = env.WP_ADMIN_PASS || 'admin';
+          const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO wp_users (ID, user_login, user_pass, user_nicename, user_email, user_url, user_registered, user_status, display_name)
+             VALUES (1, ?, ?, ?, ?, '', ?, 0, ?)`
+          ).bind(envUser, envPass, envUser, (env.ADMIN_EMAIL || envUser + '@cloudpress.site'), now, envUser).run().catch(() => {});
+        }
+
         const user = await env.DB.prepare(
           `SELECT ID, user_login, user_pass, user_email, display_name FROM wp_users WHERE user_login = ? OR user_email = ? LIMIT 1`
         ).bind(username, username).first();
@@ -3204,7 +3190,6 @@ async function handleRequest(request, env, ctx) {
   if (siteInfo.suspended) {
     return new Response(SUSPENDED_HTML, { status: 403, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
-  // 'pending' 또는 'provisioning' 상태만 준비 중 화면 표시, 나머지는 모두 WP 페이지 렌더링
   if (siteInfo.status === 'pending' || siteInfo.status === 'provisioning') {
     return new Response(PROVISIONING_HTML, { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Retry-After': '10' } });
   }
